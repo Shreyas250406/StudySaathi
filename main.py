@@ -26,11 +26,11 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
 
 # --------------------------------------------------
-# CORS (FINAL – NO MORE ISSUES)
+# CORS (FINAL – no more issues)
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🔥 FINAL FIX
+    allow_origins=["*"],   # TEMP / DEMO SAFE
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,15 +41,15 @@ app.add_middleware(
 # --------------------------------------------------
 class Answer(BaseModel):
     question_id: str
-    difficulty: str
+    difficulty: str   # easy | medium | hard
     correct: bool
 
 class RequestPayload(BaseModel):
     student_id: str
     teacher_id: Optional[str] = None
     answers: List[Answer]
-    grade: str
-    language: str
+    grade: str        # "6" to "10"
+    language: str     # "english"
 
 # --------------------------------------------------
 # SCORE LOGIC
@@ -66,13 +66,17 @@ def update_score(current_score: int, answers: List[Answer]) -> int:
     return max(0, min(100, score))
 
 # --------------------------------------------------
-# DISTRIBUTION
+# DIFFICULTY DISTRIBUTION
 # --------------------------------------------------
 def get_distribution(score: int):
-    if score >= 90: return {"hard": 3, "medium": 1, "easy": 1}
-    if score >= 70: return {"hard": 2, "medium": 2, "easy": 1}
-    if score >= 50: return {"hard": 1, "medium": 3, "easy": 1}
-    if score >= 30: return {"hard": 1, "medium": 2, "easy": 1}
+    if score >= 90:
+        return {"hard": 3, "medium": 1, "easy": 1}
+    if score >= 70:
+        return {"hard": 2, "medium": 2, "easy": 1}
+    if score >= 50:
+        return {"hard": 1, "medium": 3, "easy": 1}
+    if score >= 30:
+        return {"hard": 1, "medium": 2, "easy": 1}
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
@@ -99,27 +103,49 @@ def sync_teacher_student_analysis(student_id, teacher_id, score):
             .execute()
 
 # --------------------------------------------------
-# QUESTION SELECTION (GUARANTEED NON-EMPTY)
+# QUESTION SELECTION (NO SQL CHANGE, NO CRASH)
 # --------------------------------------------------
 def select_questions(student_id, grade, language, distribution):
     selected = []
 
     for difficulty, count in distribution.items():
-        qs = sb.table("questions_bank") \
+
+        # 1️⃣ Try grade + language (preferred)
+        res = sb.table("questions_bank") \
             .select("*") \
             .eq("difficulty", difficulty) \
             .ilike("grade", f"%{grade}%") \
             .ilike("language", f"%{language}%") \
             .limit(count) \
-            .execute().data
+            .execute()
+
+        qs = res.data or []
+
+        # 2️⃣ Fallback → language only
+        if not qs:
+            qs = sb.table("questions_bank") \
+                .select("*") \
+                .eq("difficulty", difficulty) \
+                .ilike("language", f"%{language}%") \
+                .limit(count) \
+                .execute().data or []
 
         selected.extend(qs)
 
+    # 3️⃣ Absolute safety
     if not selected:
         raise HTTPException(
-            status_code=500,
-            detail="No questions found for given grade/language"
+            status_code=404,
+            detail="No questions available yet"
         )
+
+    # 4️⃣ Save history (safe)
+    for q in selected:
+        sb.table("question_history").insert({
+            "student_id": student_id,
+            "question_id": q["id"],
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
 
     return selected
 
@@ -129,22 +155,26 @@ def select_questions(student_id, grade, language, distribution):
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
-    student = sb.table("users") \
+    # Student lookup (SAFE)
+    res = sb.table("users") \
         .select("difficulty_score") \
         .eq("id", payload.student_id) \
-        .single() \
-        .execute().data
+        .execute()
 
-    if not student:
+    if not res.data:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    new_score = update_score(student["difficulty_score"], payload.answers)
+    current_score = res.data[0]["difficulty_score"]
+
+    # Update score
+    new_score = update_score(current_score, payload.answers)
 
     sb.table("users") \
         .update({"difficulty_score": new_score}) \
         .eq("id", payload.student_id) \
         .execute()
 
+    # Teacher sync (optional)
     sync_teacher_student_analysis(
         payload.student_id,
         payload.teacher_id,
@@ -162,6 +192,7 @@ def ai_next_set(payload: RequestPayload):
 
     return {
         "score": new_score,
+        "distribution": distribution,
         "questions": questions
     }
 
