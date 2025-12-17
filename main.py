@@ -5,7 +5,6 @@ from supabase import create_client
 from typing import List, Optional
 from dotenv import load_dotenv
 import os
-import random
 
 # --------------------------------------------------
 # ENV
@@ -14,6 +13,9 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Missing Supabase credentials")
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -35,7 +37,7 @@ app.add_middleware(
 # --------------------------------------------------
 class Answer(BaseModel):
     question_id: str
-    difficulty: str
+    difficulty: str   # easy | medium | hard
     correct: bool
 
 class RequestPayload(BaseModel):
@@ -48,16 +50,19 @@ class RequestPayload(BaseModel):
 # --------------------------------------------------
 # SCORE LOGIC
 # --------------------------------------------------
-def update_score(score: int, answers: List[Answer]) -> int:
+def update_score(current_score: int, answers: List[Answer]) -> int:
+    score = current_score
+
     for a in answers:
         if a.correct:
-            score += {"easy": 1, "medium": 3, "hard": 5}.get(a.difficulty, 0)
+            score += {"easy": 1, "medium": 3, "hard": 5}[a.difficulty]
         else:
-            score -= {"easy": 5, "medium": 3, "hard": 1}.get(a.difficulty, 0)
+            score -= {"easy": 5, "medium": 3, "hard": 1}[a.difficulty]
+
     return max(0, min(100, score))
 
 # --------------------------------------------------
-# DISTRIBUTION
+# DIFFICULTY DISTRIBUTION
 # --------------------------------------------------
 def get_distribution(score: int):
     if score >= 90:
@@ -71,48 +76,29 @@ def get_distribution(score: int):
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
-# SAFE RANDOM QUESTION SELECTION
+# QUESTION SELECTION (STRICT LANGUAGE)
 # --------------------------------------------------
-def select_questions_safe(grade: str, language: str, distribution):
-    grade_int = int(grade)
-    lang = language.strip().lower()
-
+def select_questions(grade: int, language: str, distribution: dict):
     selected = []
 
     for difficulty, count in distribution.items():
-
-        # 1️⃣ strict match
         res = sb.table("questions_bank") \
             .select("*") \
-            .eq("grade", grade_int) \
+            .eq("grade", grade) \
+            .eq("language", language) \
             .eq("difficulty_level", difficulty) \
+            .order("created_at", desc=True) \
+            .limit(count) \
             .execute()
 
         qs = res.data or []
+        selected.extend(qs)
 
-        # 2️⃣ fallback: ignore difficulty
-        if not qs:
-            qs = sb.table("questions_bank") \
-                .select("*") \
-                .eq("grade", grade_int) \
-                .execute().data or []
-
-        # 3️⃣ fallback: ignore grade
-        if not qs:
-            qs = sb.table("questions_bank") \
-                .select("*") \
-                .execute().data or []
-
-        random.shuffle(qs)
-        selected.extend(qs[:count])
-
-    # 4️⃣ absolute fallback (table not empty)
     if not selected:
-        all_qs = sb.table("questions_bank").select("*").execute().data or []
-        if not all_qs:
-            raise HTTPException(500, "questions_bank is empty")
-        random.shuffle(all_qs)
-        selected = all_qs[:5]
+        raise HTTPException(
+            status_code=404,
+            detail=f"No questions available for grade {grade} and language {language}"
+        )
 
     return selected
 
@@ -122,15 +108,24 @@ def select_questions_safe(grade: str, language: str, distribution):
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
+    # convert grade safely
+    try:
+        grade = int(payload.grade)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Grade must be a number")
+
+    # fetch current score
     res = sb.table("users") \
         .select("difficulty_score") \
         .eq("id", payload.student_id) \
         .execute()
 
     if not res.data:
-        raise HTTPException(404, "Student not found")
+        raise HTTPException(status_code=404, detail="Student not found")
 
-    current_score = res.data[0]["difficulty_score"]
+    current_score = res.data[0]["difficulty_score"] or 100
+
+    # update score
     new_score = update_score(current_score, payload.answers)
 
     sb.table("users") \
@@ -140,10 +135,10 @@ def ai_next_set(payload: RequestPayload):
 
     distribution = get_distribution(new_score)
 
-    questions = select_questions_safe(
-        payload.grade,
-        payload.language,
-        distribution
+    questions = select_questions(
+        grade=grade,
+        language=payload.language,
+        distribution=distribution
     )
 
     return {
