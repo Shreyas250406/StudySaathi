@@ -5,6 +5,7 @@ from supabase import create_client
 from typing import List, Optional
 from dotenv import load_dotenv
 import os
+import random
 
 # --------------------------------------------------
 # ENV
@@ -13,9 +14,6 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Missing Supabase credentials")
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -27,17 +25,21 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --------------------------------------------------
+# IN-MEMORY QUESTION POOL
+# --------------------------------------------------
+QUESTION_POOL = {}
 
 # --------------------------------------------------
 # MODELS
 # --------------------------------------------------
 class Answer(BaseModel):
     question_id: str
-    difficulty: str   # easy | medium | hard
+    difficulty: str
     correct: bool
 
 class RequestPayload(BaseModel):
@@ -50,21 +52,19 @@ class RequestPayload(BaseModel):
 # --------------------------------------------------
 # SCORE LOGIC
 # --------------------------------------------------
-def update_score(current_score: int, answers: List[Answer]) -> int:
-    score = current_score
-
+def update_score(current, answers):
+    score = current
     for a in answers:
         if a.correct:
             score += {"easy": 1, "medium": 3, "hard": 5}[a.difficulty]
         else:
             score -= {"easy": 5, "medium": 3, "hard": 1}[a.difficulty]
-
     return max(0, min(100, score))
 
 # --------------------------------------------------
-# DIFFICULTY DISTRIBUTION
+# DISTRIBUTION
 # --------------------------------------------------
-def get_distribution(score: int):
+def get_distribution(score):
     if score >= 90:
         return {"hard": 3, "medium": 1, "easy": 1}
     if score >= 70:
@@ -76,29 +76,40 @@ def get_distribution(score: int):
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
-# QUESTION SELECTION (STRICT LANGUAGE)
+# BUILD QUESTION POOL (FETCH ALL ONCE)
 # --------------------------------------------------
-def select_questions(grade: int, language: str, distribution: dict):
+def build_pool(grade, subject, language):
+    res = sb.table("questions_bank") \
+        .select("*") \
+        .eq("grade", int(grade)) \
+        .eq("subject", subject) \
+        .eq("language", language) \
+        .execute()
+
+    data = res.data or []
+    if not data:
+        raise HTTPException(404, "No questions in DB")
+
+    easy = [q for q in data if q["difficulty_level"] == "easy"]
+    medium = [q for q in data if q["difficulty_level"] == "medium"]
+    hard = [q for q in data if q["difficulty_level"] == "hard"]
+
+    random.shuffle(easy)
+    random.shuffle(medium)
+    random.shuffle(hard)
+
+    return {"easy": easy, "medium": medium, "hard": hard}
+
+# --------------------------------------------------
+# GET QUESTIONS (NO REPEAT)
+# --------------------------------------------------
+def draw_questions(pool, distribution):
     selected = []
 
-    for difficulty, count in distribution.items():
-        res = sb.table("questions_bank") \
-            .select("*") \
-            .eq("grade", grade) \
-            .eq("language", language) \
-            .eq("difficulty_level", difficulty) \
-            .order("created_at", desc=True) \
-            .limit(count) \
-            .execute()
-
-        qs = res.data or []
-        selected.extend(qs)
-
-    if not selected:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No questions available for grade {grade} and language {language}"
-        )
+    for diff, count in distribution.items():
+        for _ in range(count):
+            if pool[diff]:
+                selected.append(pool[diff].pop())
 
     return selected
 
@@ -108,24 +119,18 @@ def select_questions(grade: int, language: str, distribution: dict):
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
-    # convert grade safely
-    try:
-        grade = int(payload.grade)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Grade must be a number")
-
-    # fetch current score
+    # 1️⃣ get current score
     res = sb.table("users") \
         .select("difficulty_score") \
         .eq("id", payload.student_id) \
         .execute()
 
     if not res.data:
-        raise HTTPException(status_code=404, detail="Student not found")
+        raise HTTPException(404, "Student not found")
 
-    current_score = res.data[0]["difficulty_score"] or 100
+    current_score = res.data[0]["difficulty_score"]
 
-    # update score
+    # 2️⃣ update score
     new_score = update_score(current_score, payload.answers)
 
     sb.table("users") \
@@ -135,11 +140,43 @@ def ai_next_set(payload: RequestPayload):
 
     distribution = get_distribution(new_score)
 
-    questions = select_questions(
-        grade=grade,
-        language=payload.language,
-        distribution=distribution
+    # 3️⃣ pool key
+    key = (
+        payload.student_id,
+        payload.grade,
+        "Language",
+        payload.language.lower()
     )
+
+    # 4️⃣ create / refresh pool
+    if key not in QUESTION_POOL or all(
+        len(QUESTION_POOL[key][d]) == 0 for d in ["easy", "medium", "hard"]
+    ):
+        QUESTION_POOL[key] = build_pool(
+            payload.grade,
+            "Language",
+            payload.language.lower()
+        )
+
+    pool = QUESTION_POOL[key]
+
+    # 5️⃣ draw questions
+    questions = draw_questions(pool, distribution)
+
+    # 6️⃣ force refresh if insufficient
+    if len(questions) < sum(distribution.values()):
+        QUESTION_POOL[key] = build_pool(
+            payload.grade,
+            "Language",
+            payload.language.lower()
+        )
+        questions = draw_questions(
+            QUESTION_POOL[key],
+            distribution
+        )
+
+    if not questions:
+        raise HTTPException(404, "No questions available")
 
     return {
         "score": new_score,
