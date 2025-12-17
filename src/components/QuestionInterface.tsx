@@ -63,7 +63,7 @@ export function QuestionInterface({
 
     if (!user) return;
 
-    const res = await fetch('http://localhost:8000/ai/next-set', {
+    const res = await fetch('https://studysaathi-1.onrender.com/ai/next-set', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
