@@ -6,6 +6,7 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from datetime import datetime
 import os
+import random
 
 # --------------------------------------------------
 # ENV
@@ -30,7 +31,7 @@ app = FastAPI()
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # demo safe
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,8 +49,8 @@ class RequestPayload(BaseModel):
     student_id: str
     teacher_id: Optional[str] = None
     answers: List[Answer]
-    grade: str        # "6" to "10"
-    language: str     # "english"
+    grade: str
+    language: str
 
 # --------------------------------------------------
 # SCORE LOGIC
@@ -66,7 +67,7 @@ def update_score(current_score: int, answers: List[Answer]) -> int:
     return max(0, min(100, score))
 
 # --------------------------------------------------
-# DIFFICULTY DISTRIBUTION
+# DISTRIBUTION LOGIC
 # --------------------------------------------------
 def get_distribution(score: int):
     if score >= 90:
@@ -103,10 +104,18 @@ def sync_teacher_student_analysis(student_id, teacher_id, score):
             .execute()
 
 # --------------------------------------------------
-# QUESTION SELECTION
+# QUESTION SELECTION (FIXED + RANDOMIZED)
 # --------------------------------------------------
 def select_questions(student_id, grade, language, distribution):
     selected = []
+
+    # already asked questions
+    asked = sb.table("question_history") \
+        .select("question_id") \
+        .eq("student_id", student_id) \
+        .execute().data or []
+
+    asked_ids = [q["question_id"] for q in asked]
 
     for difficulty, count in distribution.items():
 
@@ -115,28 +124,25 @@ def select_questions(student_id, grade, language, distribution):
             .eq("difficulty_level", difficulty) \
             .eq("grade", int(grade)) \
             .ilike("language", f"%{language}%") \
-            .limit(count) \
+            .not_.in_("question_id", asked_ids) \
             .execute()
 
         qs = res.data or []
 
-        if not qs:
-            qs = sb.table("questions_bank") \
-                .select("*") \
-                .eq("difficulty_level", difficulty) \
-                .ilike("language", f"%{language}%") \
-                .limit(count) \
-                .execute().data or []
+        # 🔀 randomize (ORDER BY random equivalent)
+        random.shuffle(qs)
 
-        selected.extend(qs)
+        # take only required count (safe)
+        selected.extend(qs[:min(count, len(qs))])
 
     if not selected:
         raise HTTPException(404, "No questions available")
 
+    # save history
     for q in selected:
         sb.table("question_history").insert({
             "student_id": student_id,
-            "question_id": q["question_id"],   # ✅ fixed
+            "question_id": q["question_id"],
             "created_at": datetime.utcnow().isoformat()
         }).execute()
 
