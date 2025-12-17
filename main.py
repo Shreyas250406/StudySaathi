@@ -26,11 +26,11 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
 
 # --------------------------------------------------
-# CORS (FINAL – no more issues)
+# CORS
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # TEMP / DEMO SAFE
+    allow_origins=["*"],   # demo safe
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,7 +80,7 @@ def get_distribution(score: int):
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
-# TEACHER ANALYSIS (SAFE)
+# TEACHER ANALYSIS
 # --------------------------------------------------
 def sync_teacher_student_analysis(student_id, teacher_id, score):
     if not teacher_id:
@@ -103,47 +103,40 @@ def sync_teacher_student_analysis(student_id, teacher_id, score):
             .execute()
 
 # --------------------------------------------------
-# QUESTION SELECTION (NO SQL CHANGE, NO CRASH)
+# QUESTION SELECTION
 # --------------------------------------------------
 def select_questions(student_id, grade, language, distribution):
     selected = []
 
     for difficulty, count in distribution.items():
 
-        # 1️⃣ Try grade + language (preferred)
         res = sb.table("questions_bank") \
             .select("*") \
-            .eq("difficulty", difficulty) \
-            .ilike("grade", f"%{grade}%") \
+            .eq("difficulty_level", difficulty) \
+            .eq("grade", int(grade)) \
             .ilike("language", f"%{language}%") \
             .limit(count) \
             .execute()
 
         qs = res.data or []
 
-        # 2️⃣ Fallback → language only
         if not qs:
             qs = sb.table("questions_bank") \
                 .select("*") \
-                .eq("difficulty", difficulty) \
+                .eq("difficulty_level", difficulty) \
                 .ilike("language", f"%{language}%") \
                 .limit(count) \
                 .execute().data or []
 
         selected.extend(qs)
 
-    # 3️⃣ Absolute safety
     if not selected:
-        raise HTTPException(
-            status_code=404,
-            detail="No questions available yet"
-        )
+        raise HTTPException(404, "No questions available")
 
-    # 4️⃣ Save history (safe)
     for q in selected:
         sb.table("question_history").insert({
             "student_id": student_id,
-            "question_id": q["id"],
+            "question_id": q["question_id"],   # ✅ fixed
             "created_at": datetime.utcnow().isoformat()
         }).execute()
 
@@ -155,18 +148,16 @@ def select_questions(student_id, grade, language, distribution):
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
-    # Student lookup (SAFE)
     res = sb.table("users") \
         .select("difficulty_score") \
         .eq("id", payload.student_id) \
         .execute()
 
     if not res.data:
-        raise HTTPException(status_code=404, detail="Student not found")
+        raise HTTPException(404, "Student not found")
 
     current_score = res.data[0]["difficulty_score"]
 
-    # Update score
     new_score = update_score(current_score, payload.answers)
 
     sb.table("users") \
@@ -174,7 +165,6 @@ def ai_next_set(payload: RequestPayload):
         .eq("id", payload.student_id) \
         .execute()
 
-    # Teacher sync (optional)
     sync_teacher_student_analysis(
         payload.student_id,
         payload.teacher_id,
