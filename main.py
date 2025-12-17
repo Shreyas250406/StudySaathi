@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 from datetime import datetime
 import os
@@ -15,11 +16,27 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_KEY in .env")
+    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_KEY")
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --------------------------------------------------
+# FastAPI app
+# --------------------------------------------------
 app = FastAPI()
+
+# --------------------------------------------------
+# CORS CONFIG (REQUIRED FOR VERCEL)
+# --------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://studysaathi.vercel.app"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --------------------------------------------------
 # Request Models
@@ -31,7 +48,7 @@ class Answer(BaseModel):
 
 class RequestPayload(BaseModel):
     student_id: str
-    teacher_id: str
+    teacher_id: Optional[str] = None
     answers: List[Answer]
     grade: str
     language: str
@@ -75,13 +92,16 @@ def get_distribution(score: int):
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
-# Teacher ↔ Student Analysis (OPTION B)
+# Teacher ↔ Student Analysis
 # --------------------------------------------------
 def sync_teacher_student_analysis(
     student_id: str,
-    teacher_id: str,
+    teacher_id: Optional[str],
     score: int
 ):
+    if not teacher_id:
+        return
+
     if score < 40:
         sb.table("teacher_student_analysis").upsert({
             "student_id": student_id,
@@ -112,7 +132,10 @@ def select_questions(student_id, grade, language, distribution):
         .data
     )
 
-    exclude_ids = [q["question_id"] for q in recent] or ["00000000-0000-0000-0000-000000000000"]
+    exclude_ids = [q["question_id"] for q in recent] or [
+        "00000000-0000-0000-0000-000000000000"
+    ]
+
     selected = []
 
     for difficulty, count in distribution.items():
@@ -129,7 +152,6 @@ def select_questions(student_id, grade, language, distribution):
         )
         selected.extend(qs)
 
-    # Save history
     for q in selected:
         sb.table("question_history").insert({
             "student_id": student_id,
@@ -145,7 +167,6 @@ def select_questions(student_id, grade, language, distribution):
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
-    # 1️⃣ Fetch student from USERS table
     student = (
         sb.table("users")
         .select("difficulty_score")
@@ -160,22 +181,18 @@ def ai_next_set(payload: RequestPayload):
 
     current_score = student["difficulty_score"]
 
-    # 2️⃣ Update score
     new_score = update_score(current_score, payload.answers)
 
-    # 3️⃣ Save score
     sb.table("users").update({
         "difficulty_score": new_score
     }).eq("id", payload.student_id).execute()
 
-    # 4️⃣ Sync teacher analysis (OPTION B)
     sync_teacher_student_analysis(
         payload.student_id,
         payload.teacher_id,
         new_score
     )
 
-    # 5️⃣ Select next questions
     distribution = get_distribution(new_score)
 
     questions = select_questions(
@@ -190,3 +207,10 @@ def ai_next_set(payload: RequestPayload):
         "distribution": distribution,
         "questions": questions
     }
+
+# --------------------------------------------------
+# HEALTH CHECK (OPTIONAL BUT NICE)
+# --------------------------------------------------
+@app.get("/health")
+def health():
+    return {"status": "ok"}
