@@ -1,223 +1,263 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Users, Upload, List, X } from 'lucide-react';
 import { supabase } from '../supabase';
 
 interface Student {
   id: string;
   name: string;
-  learningScore: number;
+  score: number;
   status: 'to-be-focused' | 'doing-well';
 }
 
-interface GradeData {
-  grade: string;
+interface GradeGroup {
+  grade: number;
   students: Student[];
 }
 
 type ViewMode = 'assignments' | 'list' | null;
 
 export function TeacherStudents() {
-  const [gradeData, setGradeData] = useState<GradeData[]>([]);
-  const [selectedGrade, setSelectedGrade] = useState<string | null>(null);
+  const [grades, setGrades] = useState<GradeGroup[]>([]);
+  const [selectedGrade, setSelectedGrade] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>(null);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  /* ================= FETCH STUDENTS ================= */
 
   useEffect(() => {
-    fetchStudentsByGrade();
+    fetchStudents();
   }, []);
 
-  /* ---------------- FETCH STUDENTS ---------------- */
+  const fetchStudents = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
 
-  const fetchStudentsByGrade = async () => {
     const { data, error } = await supabase
-      .from('users')
-      .select('id, name, grade, difficulty_score');
+      .from('students')
+      .select('student_id,name,grade,difficulty_score')
+      .eq('teacher_id', user.id);
 
     if (error) {
       console.error(error);
       return;
     }
 
-    const grouped: Record<string, Student[]> = {};
+    const grouped: Record<number, Student[]> = {};
 
-    data.forEach((u: any) => {
-      if (!grouped[u.grade]) grouped[u.grade] = [];
-
-      grouped[u.grade].push({
-        id: u.id,
-        name: u.name,
-        learningScore: u.difficulty_score,
-        status: u.difficulty_score < 60 ? 'to-be-focused' : 'doing-well'
+    data.forEach((s) => {
+      if (!grouped[s.grade]) grouped[s.grade] = [];
+      grouped[s.grade].push({
+        id: s.student_id,
+        name: s.name,
+        score: s.difficulty_score,
+        status: s.difficulty_score < 60 ? 'to-be-focused' : 'doing-well'
       });
     });
 
-    const formatted: GradeData[] = Object.keys(grouped).map(g => ({
-      grade: g,
-      students: grouped[g]
-    }));
-
-    setGradeData(formatted);
+    setGrades(
+      Object.keys(grouped).map((g) => ({
+        grade: Number(g),
+        students: grouped[Number(g)]
+      }))
+    );
   };
 
-  /* ---------------- HANDLERS ---------------- */
+  /* ================= FILE HANDLER ================= */
 
-  const handleViewAssignments = (grade: string) => {
-    setSelectedGrade(grade);
-    setViewMode('assignments');
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFile(e.target.files?.[0] ?? null);
   };
 
-  const handleViewList = (grade: string) => {
-    setSelectedGrade(grade);
-    setViewMode('list');
-  };
+  /* ================= UPLOAD ================= */
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) setUploadedFile(file);
-  };
+  const handleUploadAssignment = async () => {
+    if (!file || selectedGrade === null) return;
 
-  const handleAssignmentSubmit = async () => {
-    if (!uploadedFile || !selectedGrade) return;
+    setUploading(true);
 
-    const {
-      data: { user }
-    } = await supabase.auth.getUser();
-
-    if (!user) return;
-
-    const path = `${user.id}/${selectedGrade}/${Date.now()}.pdf`;
-
-    const { error: uploadError } = await supabase.storage
-      .from('assignments')
-      .upload(path, uploadedFile);
-
-    if (uploadError) {
-      console.error(uploadError);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setUploading(false);
       return;
     }
 
-    await supabase.from('assignments').insert({
+    const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `${user.id}/grade-${selectedGrade}/${Date.now()}-${cleanName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('assignments')
+      .upload(path, file);
+
+    if (uploadError) {
+      alert(uploadError.message);
+      setUploading(false);
+      return;
+    }
+
+    const { error: dbError } = await supabase.from('assignments').insert({
       teacher_id: user.id,
-      title: uploadedFile.name,
       grade: selectedGrade,
+      title: file.name,
       pdf_url: path
     });
 
-    alert(`Assignment uploaded for ${selectedGrade}`);
+    if (dbError) {
+      alert(dbError.message);
+    } else {
+      alert(`Assignment uploaded for Grade ${selectedGrade}`);
+    }
 
-    setUploadedFile(null);
+    setFile(null);
+    setUploading(false);
     setViewMode(null);
     setSelectedGrade(null);
   };
 
-  const handleClose = () => {
-    setViewMode(null);
-    setSelectedGrade(null);
-    setUploadedFile(null);
-  };
+  const currentGrade = grades.find((g) => g.grade === selectedGrade);
 
-  const currentGradeData = gradeData.find(g => g.grade === selectedGrade);
-
-  /* ---------------- UI ---------------- */
+  /* ================= UI ================= */
 
   return (
-    <div className="max-w-6xl mx-auto">
-      <div className="mb-8">
-        <h2 className="mb-2">Student Management</h2>
-        <p className="text-gray-600">
-          Manage students by grade, upload assignments, and view performance details
-        </p>
-      </div>
+    <div className="max-w-6xl mx-auto p-6">
+      <h2 className="text-xl font-semibold mb-1">Student Management</h2>
+      <p className="text-gray-600 mb-6">
+        Manage students by grade, upload assignments, and monitor performance
+      </p>
 
-      {!viewMode ? (
+      {/* ================= GRADE CARDS ================= */}
+      {!viewMode && (
         <div className="grid md:grid-cols-3 gap-6">
-          {gradeData.map(grade => (
-            <div
-              key={grade.grade}
-              className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow"
-            >
+          {grades.map((g) => (
+            <div key={g.grade} className="bg-white shadow rounded-xl p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                  <Users className="w-6 h-6 text-purple-600" />
+                  <Users className="text-purple-600" />
                 </div>
                 <div>
-                  <h3>{grade.grade}</h3>
-                  <p className="text-gray-600 text-sm">
-                    {grade.students.length} students
+                  <h3 className="font-semibold">Grade {g.grade}</h3>
+                  <p className="text-sm text-gray-600">
+                    {g.students.length} students
                   </p>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <button
-                  onClick={() => handleViewAssignments(grade.grade)}
-                  className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
-                >
-                  <Upload className="w-4 h-4 inline mr-2" />
-                  Assignments
-                </button>
+              <button
+                className="w-full mb-2 bg-purple-600 text-white py-2 rounded-lg"
+                onClick={() => {
+                  setSelectedGrade(g.grade);
+                  setViewMode('assignments');
+                }}
+              >
+                <Upload className="inline w-4 h-4 mr-2" />
+                Assignments
+              </button>
 
-                <button
-                  onClick={() => handleViewList(grade.grade)}
-                  className="w-full px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200"
-                >
-                  <List className="w-4 h-4 inline mr-2" />
-                  Student List
-                </button>
-              </div>
+              <button
+                className="w-full bg-purple-100 text-purple-700 py-2 rounded-lg"
+                onClick={() => {
+                  setSelectedGrade(g.grade);
+                  setViewMode('list');
+                }}
+              >
+                <List className="inline w-4 h-4 mr-2" />
+                Student List
+              </button>
             </div>
           ))}
         </div>
-      ) : (
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3>
-              {selectedGrade} –{' '}
-              {viewMode === 'assignments'
-                ? 'Assignment Management'
-                : 'Student List'}
+      )}
+
+      {/* ================= MODAL ================= */}
+      {viewMode && (
+        <div className="bg-white shadow rounded-xl p-6">
+          <div className="flex justify-between mb-6">
+            <h3 className="font-semibold">
+              Grade {selectedGrade} – {viewMode === 'assignments' ? 'Assignments' : 'Students'}
             </h3>
-            <button onClick={handleClose}>
+            <button
+              onClick={() => {
+                setViewMode(null);
+                setSelectedGrade(null);
+                setFile(null);
+              }}
+            >
               <X />
             </button>
           </div>
 
+          {/* ================= ASSIGNMENTS ================= */}
           {viewMode === 'assignments' && (
-            <div className="space-y-6">
-              <input
-                type="file"
-                accept=".pdf"
-                onChange={handleFileUpload}
-              />
+            <div className="space-y-4">
 
-              <button
-                onClick={handleAssignmentSubmit}
-                disabled={!uploadedFile}
-                className="w-full bg-purple-600 text-white py-3 rounded-lg"
-              >
-                Assign to {selectedGrade}
-              </button>
+              {/* Upload File button (only before file selection) */}
+              {!file && (
+                <label className="inline-block">
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <span className="cursor-pointer bg-purple-600 text-white px-6 py-2 rounded-lg inline-flex items-center">
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload File
+                  </span>
+                </label>
+              )}
+
+              {/* After file is chosen */}
+              {file && (
+                <>
+                  <div className="flex justify-between items-center bg-gray-100 p-3 rounded-lg">
+                    <span className="text-sm">
+                      Selected: <b>{file.name}</b>
+                    </span>
+                    <button
+                      onClick={() => setFile(null)}
+                      className="text-red-500 text-sm"
+                    >
+                      Remove
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={handleUploadAssignment}
+                    disabled={uploading}
+                    className={`w-full py-3 rounded-lg text-white font-semibold ${
+                      uploading
+                        ? 'bg-gray-400'
+                        : 'bg-purple-600 hover:bg-purple-700'
+                    }`}
+                  >
+                    {uploading ? 'Uploading...' : 'Upload Assignment'}
+                  </button>
+                </>
+              )}
             </div>
           )}
 
-          {viewMode === 'list' && currentGradeData && (
-            <table className="w-full">
-              <thead>
+          {/* ================= STUDENT LIST ================= */}
+          {viewMode === 'list' && currentGrade && (
+            <table className="w-full border">
+              <thead className="bg-gray-100">
                 <tr>
-                  <th className="text-left py-3 px-4">Student</th>
-                  <th className="text-left py-3 px-4">Score</th>
-                  <th className="text-left py-3 px-4">Status</th>
+                  <th className="text-left p-3">Name</th>
+                  <th className="text-left p-3">Score</th>
+                  <th className="text-left p-3">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {currentGradeData.students.map(s => (
-                  <tr key={s.id}>
-                    <td className="py-3 px-4">{s.name}</td>
-                    <td className="py-3 px-4">{s.learningScore}%</td>
-                    <td className="py-3 px-4">
-                      {s.status === 'doing-well'
-                        ? 'Doing well'
-                        : 'To be focused'}
+                {currentGrade.students.map((s) => (
+                  <tr key={s.id} className="border-t">
+                    <td className="p-3">{s.name}</td>
+                    <td className="p-3">{s.score}</td>
+                    <td className="p-3">
+                      {s.status === 'doing-well' ? (
+                        <span className="text-green-600 font-medium">Doing well</span>
+                      ) : (
+                        <span className="text-red-600 font-medium">To be focused</span>
+                      )}
                     </td>
                   </tr>
                 ))}

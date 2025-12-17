@@ -37,7 +37,9 @@ export function TeacherDashboard({ user, onLogout }: TeacherDashboardProps) {
         <div className="bg-purple-900/30 backdrop-blur-sm border-t border-purple-400/30">
           <div className="container mx-auto px-4 py-3 flex justify-between items-center">
             <div className="flex items-center gap-4">
-              <span className="text-white">{user.fullName}</span>
+              <span className="text-white">
+                {user.name || 'Teacher'}
+              </span>
               <span className="px-3 py-1 bg-white text-purple-700 rounded-full text-sm">
                 Teacher
               </span>
@@ -55,49 +57,37 @@ export function TeacherDashboard({ user, onLogout }: TeacherDashboardProps) {
         <nav className="bg-white/95 backdrop-blur-sm border-t border-gray-200">
           <div className="container mx-auto px-4">
             <div className="flex gap-8">
-              {/* Home */}
               <button
                 onClick={() => setActiveTab('home')}
-                className={`py-4 px-2 relative transition-colors ${
+                className={`py-4 px-2 relative ${
                   activeTab === 'home'
                     ? 'text-purple-600'
                     : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
                 Home
-                {activeTab === 'home' && (
-                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-600 to-indigo-500" />
-                )}
               </button>
 
-              {/* Students */}
               <button
                 onClick={() => setActiveTab('students')}
-                className={`py-4 px-2 relative transition-colors ${
+                className={`py-4 px-2 relative ${
                   activeTab === 'students'
                     ? 'text-purple-600'
                     : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
                 Students
-                {activeTab === 'students' && (
-                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-600 to-indigo-500" />
-                )}
               </button>
 
-              {/* View Submissions */}
               <button
                 onClick={() => setActiveTab('submissions')}
-                className={`py-4 px-2 relative transition-colors ${
+                className={`py-4 px-2 relative ${
                   activeTab === 'submissions'
                     ? 'text-purple-600'
                     : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
                 View Submissions
-                {activeTab === 'submissions' && (
-                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-600 to-indigo-500" />
-                )}
               </button>
             </div>
           </div>
@@ -107,14 +97,17 @@ export function TeacherDashboard({ user, onLogout }: TeacherDashboardProps) {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8 relative z-10">
         {activeTab === 'home' && <TeacherHome />}
-        {activeTab === 'students' && <TeacherStudents />}
-        {activeTab === 'submissions' && <TeacherAssignmentSubmissions />}
+
+        {activeTab === 'students' && (
+          <TeacherStudents teacherId={user.id} />
+        )}
+
+        {activeTab === 'submissions' && (
+          <TeacherAssignmentSubmissions />
+        )}
       </main>
 
-      {/* Feedback Section */}
       <FeedbackSection />
-
-      {/* Footer */}
       <Footer />
     </div>
   );

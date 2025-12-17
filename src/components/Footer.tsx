@@ -28,7 +28,7 @@ export function Footer() {
               </p>
               <p className="flex items-center justify-center md:justify-start gap-2">
                 <Phone size={16} />
-                +91 98765 43210
+                +91 95792 59100
               </p>
             </div>
           </div>
@@ -39,7 +39,7 @@ export function Footer() {
             <div className="flex justify-center md:justify-start gap-4">
 
               <a
-                href="https://github.com/"
+                href="https://github.com/Shreyas250406/StudySaathi.git"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-3 rounded-lg bg-gray-800 hover:bg-gray-700 hover:text-white transition"
@@ -48,7 +48,7 @@ export function Footer() {
               </a>
 
               <a
-                href="https://www.youtube.com/"
+                href="https://www.youtube.com/watch?v=z0rd419fHT0"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-3 rounded-lg bg-gray-800 hover:bg-gray-700 hover:text-white transition"
@@ -57,7 +57,7 @@ export function Footer() {
               </a>
 
               <a
-                href="https://www.linkedin.com/"
+                href="https://www.linkedin.com/posts/parth-gourshettiwar_authenx-sih2025-smartindiahackathon-activity-7384511511676866561-ZHaX?utm_source=share&utm_medium=member_desktop&rcm=ACoAAFPrcdMB6VM576Tv8tmQZjNfXzTBYbPsgLs"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-3 rounded-lg bg-gray-800 hover:bg-gray-700 hover:text-white transition"

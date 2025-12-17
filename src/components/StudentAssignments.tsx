@@ -19,10 +19,40 @@ export function StudentAssignments() {
     fetchAssignments();
   }, []);
 
+  /* ---------------- FETCH ASSIGNMENTS ---------------- */
+
   const fetchAssignments = async () => {
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    // get student grade
+    const { data: student } = await supabase
+      .from('students')
+      .select('grade')
+      .eq('student_id', user.id)
+      .single();
+
+    if (!student) return;
+
+    // fetch assignments + submission status
     const { data, error } = await supabase
       .from('assignments')
-      .select('id, title, pdf_url, created_at');
+      .select(`
+        id,
+        title,
+        pdf_url,
+        created_at,
+        assignment_submissions!left (
+          id,
+          pdf_url,
+          student_id
+        )
+      `)
+      .eq('grade', student.grade)
+      .order('created_at', { ascending: false });
 
     if (error) {
       console.error(error);
@@ -30,12 +60,24 @@ export function StudentAssignments() {
     }
 
     setAssignments(
-      data.map(a => ({
-        ...a,
-        status: 'pending'
-      }))
+      data.map((a: any) => {
+        const submission = a.assignment_submissions?.find(
+          (s: any) => s.student_id === user.id
+        );
+
+        return {
+          id: a.id,
+          title: a.title,
+          pdf_url: a.pdf_url,
+          created_at: a.created_at,
+          status: submission ? 'submitted' : 'pending',
+          submittedFile: submission?.pdf_url
+        };
+      })
     );
   };
+
+  /* ---------------- UPLOAD ANSWER ---------------- */
 
   const handleFileUpload = async (
     assignmentId: string,
@@ -54,6 +96,7 @@ export function StudentAssignments() {
 
     const path = `${assignmentId}/${user.id}.pdf`;
 
+    // upload PDF
     const { error: uploadError } = await supabase.storage
       .from('submissions')
       .upload(path, file, { upsert: true });
@@ -64,22 +107,34 @@ export function StudentAssignments() {
       return;
     }
 
-    await supabase.from('assignment_submissions').insert({
+    // upsert submission row
+    await supabase.from('assignment_submissions').upsert({
       assignment_id: assignmentId,
       student_id: user.id,
-      pdf_url: path
+      pdf_url: path,
+      submitted_at: new Date().toISOString()
     });
 
-    setAssignments(prev =>
-      prev.map(a =>
-        a.id === assignmentId
-          ? { ...a, status: 'submitted', submittedFile: file.name }
-          : a
-      )
-    );
-
+    fetchAssignments();
     setUploadingId(null);
   };
+
+  /* ---------------- DOWNLOAD ASSIGNMENT (SIGNED URL) ---------------- */
+
+  const handleDownloadAssignment = async (path: string) => {
+    const { data, error } = await supabase.storage
+      .from('assignments')
+      .createSignedUrl(path, 60); // valid for 60 seconds
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    window.open(data.signedUrl, '_blank');
+  };
+
+  /* ---------------- UI ---------------- */
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -90,7 +145,7 @@ export function StudentAssignments() {
         </p>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
         {assignments.map(assignment => (
           <div
             key={assignment.id}
@@ -127,21 +182,17 @@ export function StudentAssignments() {
               </div>
             </div>
 
-            <div className="flex gap-4">
-              <a
-                href={
-                  supabase.storage
-                    .from('assignments')
-                    .getPublicUrl(assignment.pdf_url).data.publicUrl
-                }
-                target="_blank"
-                rel="noopener noreferrer"
+            <div className="flex gap-4 flex-wrap">
+              {/* DOWNLOAD ASSIGNMENT */}
+              <button
+                onClick={() => handleDownloadAssignment(assignment.pdf_url)}
                 className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors flex items-center gap-2"
               >
                 <Download className="w-4 h-4" />
                 Download Assignment
-              </a>
+              </button>
 
+              {/* UPLOAD ANSWER */}
               {assignment.status === 'pending' && (
                 <label className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors cursor-pointer inline-flex items-center gap-2">
                   <Upload className="w-4 h-4" />
@@ -158,11 +209,12 @@ export function StudentAssignments() {
                 </label>
               )}
 
+              {/* SUBMITTED INFO */}
               {assignment.status === 'submitted' && assignment.submittedFile && (
-                <div className="flex-1 bg-green-50 px-4 py-2 rounded-lg">
+                <div className="bg-green-50 px-4 py-2 rounded-lg">
                   <p className="text-green-700 flex items-center gap-2">
                     <CheckCircle className="w-4 h-4" />
-                    Submitted: {assignment.submittedFile}
+                    Answer Submitted
                   </p>
                 </div>
               )}

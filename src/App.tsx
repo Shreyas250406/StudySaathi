@@ -2,17 +2,21 @@ import { useState } from 'react';
 import { AuthPage } from './components/AuthPage';
 import { StudentDashboard } from './components/StudentDashboard';
 import { TeacherDashboard } from './components/TeacherDashboard';
+import { Toaster } from 'react-hot-toast';
 
-export type UserRole = 'student' | 'teacher';
+/* ===== TYPES (OUTSIDE COMPONENT) ===== */
+
 
 export interface User {
   id: string;
   email: string;
-  name: string;
-  role: UserRole;
+  role: 'student' | 'teacher';
+  name?: string;
   grade?: string;
 }
 
+
+/* ===== APP COMPONENT ===== */
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
 
@@ -24,13 +28,15 @@ export default function App() {
     setUser(null);
   };
 
-  if (!user) {
-    return <AuthPage onLogin={handleLogin} />;
-  }
-
   return (
     <>
-      {user.role === 'student' ? (
+      {/* Toast Notifications */}
+      <Toaster position="top-center" />
+
+      {/* Auth / Dashboard Switch */}
+      {!user ? (
+        <AuthPage onLogin={handleLogin} />
+      ) : user.role === 'student' ? (
         <StudentDashboard user={user} onLogout={handleLogout} />
       ) : (
         <TeacherDashboard user={user} onLogout={handleLogout} />

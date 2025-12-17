@@ -55,7 +55,8 @@ export function StudentCourses({ user }: StudentCoursesProps) {
     return (
       <QuestionInterface 
         course={course!} 
-        userGrade={user.grade || 'Grade 10'}
+        userGrade={user.grade ?? 10}
+
         onBack={handleBackToCourses}
       />
     );

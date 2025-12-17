@@ -1,17 +1,15 @@
 import { useState } from 'react';
 import { User } from '../App';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
+import toast from 'react-hot-toast';
 import { supabase } from '../supabase';
 
-
 type AuthMode = 'login' | 'signup';
-type SignupStep = 'email' | 'otp' | 'details' | 'success';
+type SignupStep = 'email' | 'otp' | 'details';
 
 interface AuthPageProps {
   onLogin: (user: User) => void;
 }
-
-
 
 export function AuthPage({ onLogin }: AuthPageProps) {
   const [mode, setMode] = useState<AuthMode>('login');
@@ -30,203 +28,395 @@ export function AuthPage({ onLogin }: AuthPageProps) {
   const [loginError, setLoginError] = useState('');
   const [signupError, setSignupError] = useState('');
 
-const handleLoginSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setLoginError('');
-
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
-    password
-  });
-
-  if (error || !data.user) {
-    setLoginError('Invalid email or password');
-    return;
-  }
-
-  const userId = data.user.id;
-
-  // 1️⃣ Get base user
-  const { data: user, error: userError } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', userId)
-    .single();
-
-  if (userError || !user) {
-    setLoginError('User record not found');
-    return;
-  }
-
-  // 2️⃣ Get role-specific profile
-  let profileData = null;
-
-  if (user.role === 'student') {
-    const { data } = await supabase
-      .from('students')
-      .select('*')
-      .eq('student_id', userId)
-      .single();
-    profileData = data;
-  }
-
-  if (user.role === 'teacher') {
-    const { data } = await supabase
-      .from('teachers')
-      .select('*')
-      .eq('teacher_id', userId)
-      .single();
-    profileData = data;
-  }
-
-  // 3️⃣ Send to App.tsx
-  onLogin({
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    fullName: profileData?.name,
-    grade: profileData?.grade
-  });
-};
-
-const handleEmailCheck = (e: React.FormEvent) => {
-  e.preventDefault();
-  setSignupError('');
-
-  if (!email) {
-    setSignupError('Please enter email');
-    return;
-  }
-
-  setSignupStep('otp');
-};
-
-
-const handleOtpVerify = (e: React.FormEvent) => {
-  e.preventDefault();
-  setSignupError('');
-
-  if (otp !== '1234') {
-    setSignupError('Invalid OTP');
-    return;
-  }
-
-  setSignupStep('details');
-};
-
-
-
-const handleSignupComplete = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setSignupError('');
-
-  // 1. Check if email already exists in users table
-  const { data: existingUser } = await supabase
-    .from('users')
-    .select('id')
-    .eq('email', email)
-    .single();
-
-  if (existingUser) {
-    setSignupError('Email already registered. Please login.');
-    return;
-  }
-
-  // 2. Create auth user
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password
-  });
-
-  if (error || !data.user) {
-    setSignupError(error?.message || 'Signup failed');
-    return;
-  }
-
-  const userId = data.user.id;
-
-  // 3. Insert into users table
-  const { error: userError } = await supabase.from('users').insert({
-    id: userId,
-    email,
-    role
-  });
-
-  if (userError) {
-    setSignupError(userError.message);
-    return;
-  }
-
-  // 4. Role specific insert
- if (role === 'student') {
-  const { error } = await supabase.from('students').insert({
-    student_id: userId,
-    name: fullName,
-    grade,
-    teacher_name: teacherOrNgoName,
-    difficulty_score: 100   // ✅ ADD THIS LINE
-  });
-
-  if (error) {
-    setSignupError(error.message);
-    return;
-  }
-}
-
-    
-
-  if (role === 'teacher') {
-    const { error } = await supabase.from('teachers').insert({
-      teacher_id: userId,
-      name: fullName
-    });
-
-    if (error) {
-      setSignupError(error.message);
-      return;
-    }
-  }
-
-  // 5. Success
-  setSignupStep('success');
-
-  setTimeout(() => {
-    setMode('login');
-    setSignupStep('email');
+  const resetAuthFields = () => {
     setEmail('');
     setPassword('');
     setOtp('');
     setFullName('');
     setGrade('');
     setTeacherOrNgoName('');
-  }, 1500);
-};
+    setLoginError('');
+    setSignupError('');
+  };
 
+  const switchToSignup = () => {
+    resetAuthFields();
+    setMode('signup');
+    setSignupStep('email');
+  };
 
+  const switchToLogin = () => {
+    resetAuthFields();
+    setMode('login');
+  };
 
- const switchToSignup = () => {
-  setMode('signup');
-  setSignupStep('email');
-  setLoginError('');
-  setSignupError('');
-  setEmail('');
-  setPassword('');
-};
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
 
+    // 1. Auth login
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
 
-const switchToLogin = () => {
-  setMode('login');
-  setLoginError('');
-  setSignupError('');
-  setEmail('');
-  setPassword('');
-};
+    if (error || !data.user) {
+      setLoginError('Invalid email or password');
+      return;
+    }
 
+    const userId = data.user.id;
+
+    // 2. Fetch role
+    const { data: baseUser, error: baseError } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (baseError || !baseUser) {
+      setLoginError('User role not found');
+      return;
+    }
+
+    // 3. Role-specific fetch and login
+    if (baseUser.role === 'student') {
+      const { data: student } = await supabase
+        .from('students')
+        .select('name, grade')
+        .eq('student_id', userId)
+        .single();
+
+      onLogin({
+        id: userId,
+        email,
+        role: 'student',
+        name: student?.name,
+        grade: student?.grade
+      });
+      resetAuthFields();
+    } else if (baseUser.role === 'teacher') {
+      const { data: teacher } = await supabase
+        .from('teachers')
+        .select('name')
+        .eq('teacher_id', userId)
+        .single();
+
+      onLogin({
+        id: userId,
+        email,
+        role: 'teacher',
+        name: teacher?.name
+      });
+      resetAuthFields();
+    }
+  };
+
+  const handleEmailCheck = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignupError('');
+
+    if (!email) {
+      setSignupError('Please enter email');
+      return;
+    }
+
+    setSignupStep('otp');
+  };
+
+  const handleOtpVerify = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignupError('');
+
+    if (otp !== '1234') {
+      setSignupError('Invalid OTP');
+      return;
+    }
+
+    setSignupStep('details');
+  };
+
+  const handleSignupComplete = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSignupError('');
+
+    // 1. Check duplicate email
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (existingUser) {
+      setSignupError('Email already registered. Please login.');
+      return;
+    }
+
+    // 2. Create auth user
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: window.location.origin }
+    });
+
+    if (error) {
+      console.error('SIGNUP ERROR:', error);
+      setSignupError(error.message);
+      return;
+    }
+
+    if (!data.user) {
+      setSignupError('Signup succeeded but user not returned');
+      return;
+    }
+
+    const userId = data.user.id;
+
+    // 3. Save role
+    const { error: userError } = await supabase
+      .from('users')
+      .upsert({ id: userId, email, role });
+
+    if (userError) {
+      console.error('USER INSERT FAILED:', userError);
+      setSignupError('Failed to save user role');
+      return;
+    }
+
+    // 4. Role-specific tables
+    if (role === 'student') {
+      // Check teacher exists
+      const { data: teacher, error: teacherError } = await supabase
+        .from('teachers')
+        .select('teacher_id')
+        .eq('name', teacherOrNgoName)
+        .maybeSingle();
+
+      if (teacherError) {
+        setSignupError('Failed to verify teacher');
+        return;
+      }
+
+      if (!teacher) {
+        setSignupError('No such teacher found. Please check the name.');
+        return;
+      }
+
+      // Insert student ONLY if teacher exists
+      const { error: studentError } = await supabase.from('students').insert({
+        student_id: userId,
+        name: fullName,
+        grade: Number(grade),
+        teacher_id: teacher.teacher_id,
+        difficulty_score: 100
+      });
+
+      if (studentError) {
+        setSignupError(studentError.message);
+        return;
+      }
+    } else if (role === 'teacher') {
+      const { error: teacherError } = await supabase.from('teachers').insert({
+        teacher_id: userId,
+        name: fullName
+      });
+
+      if (teacherError) {
+        setSignupError(teacherError.message);
+        return;
+      }
+    }
+
+    // Success - redirect to login
+    toast.success('Account created successfully! Please login.');
+    setSignupStep('email');
+    setMode('login');
+    resetAuthFields();
+  };
+
+  const renderSignupForm = () => {
+    if (signupStep === 'email') {
+      return (
+        <form onSubmit={handleEmailCheck} className="space-y-6">
+          <div>
+            <input
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+              required
+            />
+          </div>
+
+          {signupError && (
+            <div className="text-red-500 text-sm">{signupError}</div>
+          )}
+
+          <button
+            type="submit"
+            className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition-colors"
+          >
+            Verify Email
+          </button>
+
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={switchToLogin}
+              className="text-purple-600 hover:text-purple-700 transition-colors"
+            >
+              Back to Login
+            </button>
+          </div>
+        </form>
+      );
+    }
+
+    if (signupStep === 'otp') {
+      return (
+        <form onSubmit={handleOtpVerify} className="space-y-6">
+          <div>
+            <input
+              type="text"
+              placeholder="Enter OTP (use 1234)"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+              required
+            />
+          </div>
+
+          {signupError && (
+            <div className="text-red-500 text-sm">{signupError}</div>
+          )}
+
+          <button
+            type="submit"
+            className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition-colors"
+          >
+            Verify OTP
+          </button>
+
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setSignupStep('email');
+                setOtp('');
+                setSignupError('');
+              }}
+              className="text-purple-600 hover:text-purple-700 transition-colors"
+            >
+              Back
+            </button>
+          </div>
+        </form>
+      );
+    }
+
+    if (signupStep === 'details') {
+      return (
+        <>
+          <form onSubmit={handleSignupComplete} className="space-y-6">
+            <div>
+              <input
+                type="text"
+                placeholder="Full Name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                required
+              />
+            </div>
+
+            <div>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as 'student' | 'teacher')}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+              >
+                <option value="student">Student</option>
+                <option value="teacher">Teacher</option>
+              </select>
+            </div>
+
+            {role === 'student' && (
+              <div>
+                <select
+                  value={grade}
+                  onChange={(e) => setGrade(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  required
+                >
+                  <option value="">Select Grade</option>
+                  <option value="6">Grade 6</option>
+                  <option value="7">Grade 7</option>
+                  <option value="8">Grade 8</option>
+                  <option value="9">Grade 9</option>
+                  <option value="10">Grade 10</option>
+                </select>
+              </div>
+            )}
+
+            <div>
+              <input
+                type="text"
+                placeholder="Teacher / NGO Name"
+                value={teacherOrNgoName}
+                onChange={(e) => setTeacherOrNgoName(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                required
+              />
+            </div>
+
+            <div>
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                required
+                minLength={6}
+              />
+            </div>
+
+            {signupError && (
+              <div className="text-red-500 text-sm">{signupError}</div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition-colors"
+            >
+              Create Account
+            </button>
+          </form>
+
+          <div className="text-center mt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setSignupStep('otp');
+                setSignupError('');
+              }}
+              className="text-purple-600 hover:text-purple-700 transition-colors"
+            >
+              Back
+            </button>
+          </div>
+        </>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-white">
       {/* Diagonal Background */}
-      <AnimatePresence mode="wait">
+      <AnimatePresence>
         {mode === 'login' ? (
           <motion.div
             key="login-bg"
@@ -315,8 +505,6 @@ const switchToLogin = () => {
                       </button>
                     </div>
                   </form>
-
-
                 </div>
               </motion.div>
 
@@ -369,159 +557,7 @@ const switchToLogin = () => {
               >
                 <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
                   <h1 className="text-center text-purple-600 mb-8">Create Your StudySaathi Account</h1>
-
-                  {signupStep === 'email' && (
-                    <form onSubmit={handleEmailCheck} className="space-y-6">
-                      <div>
-                        <input
-                          type="email"
-                          placeholder="Enter your email"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          required
-                        />
-                      </div>
-
-                      {signupError && (
-                        <div className="text-red-500 text-sm">{signupError}</div>
-                      )}
-
-                      <button
-                        type="submit"
-                        className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition-colors"
-                      >
-                        Verify Email
-                      </button>
-
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={switchToLogin}
-                          className="text-purple-600 hover:text-purple-700 transition-colors"
-                        >
-                          Back to Login
-                        </button>
-                      </div>
-                    </form>
-                  )}
-
-                  {signupStep === 'otp' && (
-                    <form onSubmit={handleOtpVerify} className="space-y-6">
-                      <div>
-                        <input
-                          type="text"
-                          placeholder="Enter OTP"
-                          value={otp}
-                          onChange={(e) => setOtp(e.target.value)}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-center tracking-widest"
-                          maxLength={6}
-                          required
-                        />
-                        <p className="text-sm text-gray-500 mt-2">An OTP has been sent to your email.</p>
-                        <p className="text-sm text-purple-600 mt-1">Demo: Use "1234" as OTP</p>
-                      </div>
-
-                      {signupError && (
-                        <div className="text-red-500 text-sm">{signupError}</div>
-                      )}
-
-                      <button
-                        type="submit"
-                        className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition-colors"
-                      >
-                        Verify OTP
-                      </button>
-                    </form>
-                  )}
-
-                  {signupStep === 'details' && (
-                    <form onSubmit={handleSignupComplete} className="space-y-6">
-                      <div>
-                        <input
-                          type="text"
-                          placeholder="Full Name"
-                          value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <select
-                          value={role}
-                          onChange={(e) => setRole(e.target.value as 'student' | 'teacher')}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                        >
-                          <option value="student">Student</option>
-                          <option value="teacher">Teacher</option>
-                        </select>
-                      </div>
-
-                      {role === 'student' && (
-                        <div>
-                          <select
-                            value={grade}
-                            onChange={(e) => setGrade(e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                            required
-                          >
-                            <option value="">Select Grade</option>
-                            <option value="Grade 6">Grade 6</option>
-                            <option value="Grade 7">Grade 7</option>
-                            <option value="Grade 8">Grade 8</option>
-                            <option value="Grade 9">Grade 9</option>
-                            <option value="Grade 10">Grade 10</option>
-                            <option value="Grade 11">Grade 11</option>
-                            <option value="Grade 12">Grade 12</option>
-                          </select>
-                        </div>
-                      )}
-
-                      <div>
-                        <input
-                          type="text"
-                          placeholder="Teacher / NGO Name"
-                          value={teacherOrNgoName}
-                          onChange={(e) => setTeacherOrNgoName(e.target.value)}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <input
-                          type="password"
-                          placeholder="Password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          required
-                          minLength={6}
-                        />
-                      </div>
-
-                      <button
-                        type="submit"
-                        className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition-colors"
-                      >
-                        Create Account
-                      </button>
-                    </form>
-                  )}
-
-                  {signupStep === 'success' && (
-                    <div className="text-center py-8">
-                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <h2 className="text-green-600 mb-2">Account created successfully!</h2>
-                      <p className="text-gray-500">Redirecting to login...</p>
-                    </div>
-                  )}
+                  {renderSignupForm()}
                 </div>
               </motion.div>
             </>

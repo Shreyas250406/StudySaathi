@@ -12,7 +12,8 @@ interface Course {
 
 interface QuestionInterfaceProps {
   course: Course;
-  userGrade: string;
+  userGrade: number;
+
   onBack: () => void;
 }
 
@@ -49,8 +50,9 @@ export function QuestionInterface({
      FETCH INITIAL QUESTION SET FROM AI
   -------------------------------------------------- */
   useEffect(() => {
-    fetchNextSet([]);
-  }, []);
+  fetchNextSet([]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   const fetchNextSet = async (answerPayload: AnswerPayload[]) => {
     setLoading(true);
@@ -66,7 +68,8 @@ export function QuestionInterface({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         student_id: user.id,
-        teacher_id: user.id, // or actual mapped teacher_id
+        teacher_id: null,
+
         grade: userGrade,
         language: course.language.toLowerCase(),
         answers: answerPayload
