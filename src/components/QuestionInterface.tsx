@@ -13,7 +13,6 @@ interface Course {
 interface QuestionInterfaceProps {
   course: Course;
   userGrade: number;
-
   onBack: () => void;
 }
 
@@ -47,12 +46,12 @@ export function QuestionInterface({
   const currentQuestion = questions[currentIndex];
 
   /* --------------------------------------------------
-     FETCH INITIAL QUESTION SET FROM AI
+     FETCH QUESTIONS FROM AI
   -------------------------------------------------- */
   useEffect(() => {
-  fetchNextSet([]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []);
+    fetchNextSet([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchNextSet = async (answerPayload: AnswerPayload[]) => {
     setLoading(true);
@@ -61,30 +60,52 @@ export function QuestionInterface({
       data: { user }
     } = await supabase.auth.getUser();
 
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
-    const res = await fetch('https://studysaathi-1.onrender.com/ai/next-set', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        student_id: user.id,
-        teacher_id: null,
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/ai/next-set`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            student_id: user.id,
+            teacher_id: null,
+            grade: String(userGrade), // ✅ IMPORTANT
+            language: course.language.toLowerCase(),
+            answers: answerPayload
+          })
+        }
+      );
 
-        grade: userGrade,
-        language: course.language.toLowerCase(),
-        answers: answerPayload
-      })
-    });
+      if (!res.ok) {
+        console.error('AI API error:', await res.text());
+        setLoading(false);
+        return;
+      }
 
-    const data = await res.json();
+      const data = await res.json();
 
-    setQuestions(data.questions);
-    setLearningScore(data.score);
-    setCurrentIndex(0);
-    setSelectedAnswer(null);
-    setShowResult(false);
-    setAnswers([]);
-    setLoading(false);
+      if (!data.questions || data.questions.length === 0) {
+        console.warn('No questions returned from AI');
+        setLoading(false);
+        return;
+      }
+
+      setQuestions(data.questions);
+      setLearningScore(data.score);
+      setCurrentIndex(0);
+      setSelectedAnswer(null);
+      setShowResult(false);
+      setAnswers([]);
+    } catch (err) {
+      console.error('Failed to fetch AI questions', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   /* --------------------------------------------------
@@ -96,7 +117,7 @@ export function QuestionInterface({
   };
 
   const handleSubmit = () => {
-    if (selectedAnswer === null) return;
+    if (selectedAnswer === null || !currentQuestion) return;
 
     const isCorrect = selectedAnswer === currentQuestion.correct_option;
 
@@ -118,7 +139,6 @@ export function QuestionInterface({
       setSelectedAnswer(null);
       setShowResult(false);
     } else {
-      // Send all answers to AI and fetch next adaptive set
       fetchNextSet(answers);
     }
   };
@@ -134,6 +154,10 @@ export function QuestionInterface({
   -------------------------------------------------- */
   if (loading) {
     return <p className="text-center">Loading AI questions...</p>;
+  }
+
+  if (!currentQuestion) {
+    return <p className="text-center">No questions available.</p>;
   }
 
   return (
@@ -232,7 +256,7 @@ export function QuestionInterface({
           </div>
         )}
 
-        {/* Actions */}
+        {/* Action Button */}
         <button
           onClick={showResult ? handleNext : handleSubmit}
           disabled={!showResult && selectedAnswer === null}
