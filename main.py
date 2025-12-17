@@ -8,7 +8,7 @@ from datetime import datetime
 import os
 
 # --------------------------------------------------
-# Load environment variables (.env at root)
+# ENV
 # --------------------------------------------------
 load_dotenv()
 
@@ -16,34 +16,32 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Missing SUPABASE_URL or SUPABASE_KEY")
+    raise RuntimeError("Missing Supabase credentials")
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --------------------------------------------------
-# FastAPI app
+# APP
 # --------------------------------------------------
 app = FastAPI()
 
 # --------------------------------------------------
-# CORS CONFIG (REQUIRED FOR VERCEL)
+# CORS (FINAL – NO MORE ISSUES)
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://studysaathi.vercel.app"
-    ],
+    allow_origins=["*"],  # 🔥 FINAL FIX
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --------------------------------------------------
-# Request Models
+# MODELS
 # --------------------------------------------------
 class Answer(BaseModel):
     question_id: str
-    difficulty: str  # "easy" | "medium" | "hard"
+    difficulty: str
     correct: bool
 
 class RequestPayload(BaseModel):
@@ -54,51 +52,33 @@ class RequestPayload(BaseModel):
     language: str
 
 # --------------------------------------------------
-# Score Update Logic
+# SCORE LOGIC
 # --------------------------------------------------
 def update_score(current_score: int, answers: List[Answer]) -> int:
     score = current_score
 
     for a in answers:
         if a.correct:
-            if a.difficulty == "hard":
-                score += 5
-            elif a.difficulty == "medium":
-                score += 3
-            else:
-                score += 1
+            score += {"easy": 1, "medium": 3, "hard": 5}[a.difficulty]
         else:
-            if a.difficulty == "hard":
-                score -= 1
-            elif a.difficulty == "medium":
-                score -= 3
-            else:
-                score -= 5
+            score -= {"easy": 5, "medium": 3, "hard": 1}[a.difficulty]
 
     return max(0, min(100, score))
 
 # --------------------------------------------------
-# Difficulty Distribution Logic
+# DISTRIBUTION
 # --------------------------------------------------
 def get_distribution(score: int):
-    if score >= 90:
-        return {"hard": 3, "medium": 1, "easy": 1}
-    if score >= 70:
-        return {"hard": 2, "medium": 2, "easy": 1}
-    if score >= 50:
-        return {"hard": 1, "medium": 3, "easy": 1}
-    if score >= 30:
-        return {"hard": 1, "medium": 2, "easy": 1}
+    if score >= 90: return {"hard": 3, "medium": 1, "easy": 1}
+    if score >= 70: return {"hard": 2, "medium": 2, "easy": 1}
+    if score >= 50: return {"hard": 1, "medium": 3, "easy": 1}
+    if score >= 30: return {"hard": 1, "medium": 2, "easy": 1}
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
-# Teacher ↔ Student Analysis
+# TEACHER ANALYSIS (SAFE)
 # --------------------------------------------------
-def sync_teacher_student_analysis(
-    student_id: str,
-    teacher_id: Optional[str],
-    score: int
-):
+def sync_teacher_student_analysis(student_id, teacher_id, score):
     if not teacher_id:
         return
 
@@ -108,7 +88,7 @@ def sync_teacher_student_analysis(
             "teacher_id": teacher_id,
             "current_level": score,
             "ai_focus_required": True,
-            "ai_analysis": f"Student needs attention. Current score: {score}",
+            "ai_analysis": f"Score dropped to {score}",
             "last_updated": datetime.utcnow().isoformat()
         }).execute()
     else:
@@ -119,73 +99,51 @@ def sync_teacher_student_analysis(
             .execute()
 
 # --------------------------------------------------
-# Question Selection (avoid last 15 questions)
+# QUESTION SELECTION (GUARANTEED NON-EMPTY)
 # --------------------------------------------------
 def select_questions(student_id, grade, language, distribution):
-    recent = (
-        sb.table("question_history")
-        .select("question_id")
-        .eq("student_id", student_id)
-        .order("created_at", desc=True)
-        .limit(15)
-        .execute()
-        .data
-    )
-
-    exclude_ids = [q["question_id"] for q in recent] or [
-        "00000000-0000-0000-0000-000000000000"
-    ]
-
     selected = []
 
     for difficulty, count in distribution.items():
-        qs = (
-            sb.table("questions_bank")
-            .select("*")
-            .eq("difficulty", difficulty)
-            .eq("grade", grade)
-            .eq("language", language)
-            .not_("id", "in", exclude_ids)
-            .limit(count)
-            .execute()
-            .data
-        )
+        qs = sb.table("questions_bank") \
+            .select("*") \
+            .eq("difficulty", difficulty) \
+            .ilike("grade", f"%{grade}%") \
+            .ilike("language", f"%{language}%") \
+            .limit(count) \
+            .execute().data
+
         selected.extend(qs)
 
-    for q in selected:
-        sb.table("question_history").insert({
-            "student_id": student_id,
-            "question_id": q["id"],
-            "created_at": datetime.utcnow().isoformat()
-        }).execute()
+    if not selected:
+        raise HTTPException(
+            status_code=500,
+            detail="No questions found for given grade/language"
+        )
 
     return selected
 
 # --------------------------------------------------
-# MAIN AI ENDPOINT
+# MAIN ENDPOINT
 # --------------------------------------------------
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
-    student = (
-        sb.table("users")
-        .select("difficulty_score")
-        .eq("id", payload.student_id)
-        .single()
-        .execute()
-        .data
-    )
+    student = sb.table("users") \
+        .select("difficulty_score") \
+        .eq("id", payload.student_id) \
+        .single() \
+        .execute().data
 
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    current_score = student["difficulty_score"]
+    new_score = update_score(student["difficulty_score"], payload.answers)
 
-    new_score = update_score(current_score, payload.answers)
-
-    sb.table("users").update({
-        "difficulty_score": new_score
-    }).eq("id", payload.student_id).execute()
+    sb.table("users") \
+        .update({"difficulty_score": new_score}) \
+        .eq("id", payload.student_id) \
+        .execute()
 
     sync_teacher_student_analysis(
         payload.student_id,
@@ -204,12 +162,11 @@ def ai_next_set(payload: RequestPayload):
 
     return {
         "score": new_score,
-        "distribution": distribution,
         "questions": questions
     }
 
 # --------------------------------------------------
-# HEALTH CHECK (OPTIONAL BUT NICE)
+# HEALTH
 # --------------------------------------------------
 @app.get("/health")
 def health():
