@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from supabase import create_client
 from typing import List, Optional
 from dotenv import load_dotenv
-from datetime import datetime
 import os
 import random
 
@@ -15,9 +14,6 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Missing Supabase credentials")
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -39,7 +35,7 @@ app.add_middleware(
 # --------------------------------------------------
 class Answer(BaseModel):
     question_id: str
-    difficulty: str   # easy | medium | hard
+    difficulty: str
     correct: bool
 
 class RequestPayload(BaseModel):
@@ -52,17 +48,16 @@ class RequestPayload(BaseModel):
 # --------------------------------------------------
 # SCORE LOGIC
 # --------------------------------------------------
-def update_score(current_score: int, answers: List[Answer]) -> int:
-    score = current_score
+def update_score(score: int, answers: List[Answer]) -> int:
     for a in answers:
         if a.correct:
-            score += {"easy": 1, "medium": 3, "hard": 5}[a.difficulty]
+            score += {"easy": 1, "medium": 3, "hard": 5}.get(a.difficulty, 0)
         else:
-            score -= {"easy": 5, "medium": 3, "hard": 1}[a.difficulty]
+            score -= {"easy": 5, "medium": 3, "hard": 1}.get(a.difficulty, 0)
     return max(0, min(100, score))
 
 # --------------------------------------------------
-# DISTRIBUTION LOGIC
+# DISTRIBUTION
 # --------------------------------------------------
 def get_distribution(score: int):
     if score >= 90:
@@ -76,53 +71,48 @@ def get_distribution(score: int):
     return {"hard": 1, "medium": 1, "easy": 3}
 
 # --------------------------------------------------
-# TEACHER ANALYSIS (OPTIONAL)
+# SAFE RANDOM QUESTION SELECTION
 # --------------------------------------------------
-def sync_teacher_student_analysis(student_id, teacher_id, score):
-    if not teacher_id:
-        return
+def select_questions_safe(grade: str, language: str, distribution):
+    grade_int = int(grade)
+    lang = language.strip().lower()
 
-    if score < 40:
-        sb.table("teacher_student_analysis").upsert({
-            "student_id": student_id,
-            "teacher_id": teacher_id,
-            "current_level": score,
-            "ai_focus_required": True,
-            "ai_analysis": f"Score dropped to {score}",
-            "last_updated": datetime.utcnow().isoformat()
-        }).execute()
-    else:
-        sb.table("teacher_student_analysis") \
-            .delete() \
-            .eq("student_id", student_id) \
-            .eq("teacher_id", teacher_id) \
-            .execute()
-
-# --------------------------------------------------
-# RANDOM QUESTION SELECTION (NO HISTORY)
-# --------------------------------------------------
-def select_questions(grade, language, distribution):
     selected = []
 
     for difficulty, count in distribution.items():
 
+        # 1️⃣ strict match
         res = sb.table("questions_bank") \
             .select("*") \
+            .eq("grade", grade_int) \
             .eq("difficulty_level", difficulty) \
-            .eq("grade", int(grade)) \
-            .ilike("language", f"%{language}%") \
             .execute()
 
         qs = res.data or []
 
+        # 2️⃣ fallback: ignore difficulty
         if not qs:
-            continue  # allow partial availability
+            qs = sb.table("questions_bank") \
+                .select("*") \
+                .eq("grade", grade_int) \
+                .execute().data or []
+
+        # 3️⃣ fallback: ignore grade
+        if not qs:
+            qs = sb.table("questions_bank") \
+                .select("*") \
+                .execute().data or []
 
         random.shuffle(qs)
-        selected.extend(qs[:min(count, len(qs))])
+        selected.extend(qs[:count])
 
+    # 4️⃣ absolute fallback (table not empty)
     if not selected:
-        raise HTTPException(404, "No questions available")
+        all_qs = sb.table("questions_bank").select("*").execute().data or []
+        if not all_qs:
+            raise HTTPException(500, "questions_bank is empty")
+        random.shuffle(all_qs)
+        selected = all_qs[:5]
 
     return selected
 
@@ -132,7 +122,6 @@ def select_questions(grade, language, distribution):
 @app.post("/ai/next-set")
 def ai_next_set(payload: RequestPayload):
 
-    # 1️⃣ Get student score
     res = sb.table("users") \
         .select("difficulty_score") \
         .eq("id", payload.student_id) \
@@ -142,8 +131,6 @@ def ai_next_set(payload: RequestPayload):
         raise HTTPException(404, "Student not found")
 
     current_score = res.data[0]["difficulty_score"]
-
-    # 2️⃣ Update score
     new_score = update_score(current_score, payload.answers)
 
     sb.table("users") \
@@ -151,17 +138,9 @@ def ai_next_set(payload: RequestPayload):
         .eq("id", payload.student_id) \
         .execute()
 
-    # 3️⃣ Teacher sync (optional)
-    sync_teacher_student_analysis(
-        payload.student_id,
-        payload.teacher_id,
-        new_score
-    )
-
-    # 4️⃣ Select questions
     distribution = get_distribution(new_score)
 
-    questions = select_questions(
+    questions = select_questions_safe(
         payload.grade,
         payload.language,
         distribution
