@@ -46,7 +46,7 @@ export function QuestionInterface({
   const currentQuestion = questions[currentIndex];
 
   /* --------------------------------------------------
-     FETCH QUESTIONS FROM AI
+     FETCH QUESTIONS FROM AI (PRODUCTION)
   -------------------------------------------------- */
   useEffect(() => {
     fetchNextSet([]);
@@ -67,14 +67,14 @@ export function QuestionInterface({
 
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/ai/next-set`,
+        'https://studysaathi-1.onrender.com/ai/next-set',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             student_id: user.id,
             teacher_id: null,
-            grade: String(userGrade), // ✅ IMPORTANT
+            grade: String(userGrade),
             language: course.language.toLowerCase(),
             answers: answerPayload
           })
@@ -89,13 +89,22 @@ export function QuestionInterface({
 
       const data = await res.json();
 
-      if (!data.questions || data.questions.length === 0) {
-        console.warn('No questions returned from AI');
-        setLoading(false);
-        return;
-      }
+      // 🔁 TRANSFORM BACKEND QUESTIONS → UI FORMAT
+      const mappedQuestions: Question[] = data.questions.map((q: any) => ({
+        id: q.question_id,
+        question: q.question_text,
+        options: [
+          q.option_a,
+          q.option_b,
+          q.option_c,
+          q.option_d
+        ],
+        correct_option:
+          ['A', 'B', 'C', 'D'].indexOf(q.correct_answer),
+        difficulty: q.difficulty_level
+      }));
 
-      setQuestions(data.questions);
+      setQuestions(mappedQuestions);
       setLearningScore(data.score);
       setCurrentIndex(0);
       setSelectedAnswer(null);
@@ -119,7 +128,8 @@ export function QuestionInterface({
   const handleSubmit = () => {
     if (selectedAnswer === null || !currentQuestion) return;
 
-    const isCorrect = selectedAnswer === currentQuestion.correct_option;
+    const isCorrect =
+      selectedAnswer === currentQuestion.correct_option;
 
     setAnswers(prev => [
       ...prev,
