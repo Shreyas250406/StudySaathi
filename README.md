@@ -20,17 +20,7 @@ NGO classrooms often face the challenge of "mixed-ability" groups where a single
 * **Empowering Teachers:** Providing a bird's-eye view of the classroom to identify which students are excelling and who needs immediate intervention.
 * **Accessibility:** Offering courses segmented by grade and language to cater to diverse backgrounds.
 
----
 
-## 🎨 UI Preview & Designs
-
-| Landing Page | Student Dashboard |
-| :---: | :---: |
-| ![Landing Page](https://via.placeholder.com/400x225?text=Landing+Page+Screenshot) | ![Student Dashboard](https://via.placeholder.com/400x225?text=Student+Dashboard+Screenshot) |
-
-| Teacher Dashboard | Adaptive Quiz Interface |
-| :---: | :---: |
-| ![Teacher Dashboard](https://via.placeholder.com/400x225?text=Teacher+Dashboard+Screenshot) | ![Quiz Interface](https://via.placeholder.com/400x225?text=Adaptive+Interface+Screenshot) |
 
 ---
 
